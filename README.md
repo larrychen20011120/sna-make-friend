@@ -12,6 +12,9 @@ pip install -r requirements.txt
 ```
 
 ## Sample Code of training model
+* train the GCN model with `hidden-size=16`, `lr=0.001`
+* the AUC performance converges to **0.967920**
+  
 ```python
 import itertools
 import configparser
