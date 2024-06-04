@@ -6,9 +6,28 @@
 mkdir facebook
 ```
 2. download the certain file `combined-adj-sparsefeat.pkl` which is the combined version of the facebook files
+3. install dependencies
+```
+pip install -r requirements.txt
+```
 
 ## Sample Code of training model
-```python=
+```python
+import itertools
+import configparser
+import os
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import dgl
+from dgl.nn import SAGEConv, GraphConv
+import dgl.function as fn
+
+from utils import compute_loss, compute_auc
+from dataset import LinkPredictionDataset
+
+
 # testing for the class
 if __name__ == "__main__":
 
