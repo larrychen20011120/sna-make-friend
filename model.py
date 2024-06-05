@@ -60,8 +60,15 @@ class Pipeline:
 
         self.pred = DotPredictor()
 
+    def load_model(self, path):
+        self.model.load_state_dict(torch.load(path))
+
+    def save_model(self, path):
+        torch.save(self.model.state_dict(), path)
+
     def train(self, ds, lr=0.001):
 
+        training_losses = []
         # ----------- set up loss and optimizer -------------- #
         # in this case, loss will in training loop
         optimizer = torch.optim.Adam(itertools.chain(self.model.parameters(), self.pred.parameters()), lr=lr)
@@ -81,20 +88,23 @@ class Pipeline:
 
             if e % 5 == 0:
                 print('In epoch {}, loss: {}'.format(e, loss))
+                training_losses.append(loss.item())
 
         with torch.no_grad():
             pos_score = self.pred(ds["test_pos_g"], h)
             neg_score = self.pred(ds["test_neg_g"], h)
             print(f"AUC: {compute_auc(pos_score, neg_score):.6f}")
+
+        return training_losses
         
     def recommend(self, input_graph, user_id=0):
         
         # `h` represents the node embeddings, with shape [num_nodes, hidden_size]
-        h = self.model(input_graph)
+        h = self.model(input_graph, input_graph.ndata['feat'])
         # generate a graph with (num_nodes - num_friends_of_user) edges
         # one end of the edge is user_id
         # the other end is a user that's NOT friends with user_id
-        u, v = input_graph.edges
+        u, v = input_graph.edges()
         user_friends = set()
         user_neg_u, user_neg_v = [], []
         for n1, n2 in zip(u, v):   # get all friends of user_id
@@ -103,7 +113,7 @@ class Pipeline:
             if int(n2) == user_id:
                 user_friends.add(int(n1))
 
-        for i in range(input_graph.num_nodes):  # generate "negative edges" for user_id
+        for i in range(input_graph.num_nodes()):  # generate "negative edges" for user_id
             if i != user_id and i not in user_friends:
                 user_neg_u.append(user_id)
                 user_neg_v.append(i)
@@ -113,17 +123,26 @@ class Pipeline:
         pred = DotPredictor()
 
         # calculate the score of each user
-        scores = [(i, score) for i, score in enumerate(pred(user_g, h))]
+        with torch.no_grad():
+            scores = [(i, score.item()) for i, score in enumerate(pred(user_g, h))]
 
         # produce final ranked list
         scores.sort(key=lambda x: -x[1])
 
-        # display results
+        """# display results
         print(f"List of 5 suggested friends for user {user_id}:")
         for i in range(5):
-            print(f'- User {scores[i][0]}, score = {scores[i][1]}')
+            print(f'- User {scores[i][0]}, score = {scores[i][1]}')"""
 
         return scores
+    
+    def predict(self, input_graph, src_id=0, tgt_id=100):
+
+        with torch.no_grad():
+            h = self.model(input_graph, input_graph.ndata['feat'])
+            score = torch.sum(h[src_id] * h[tgt_id])
+
+        return score.item()
 
 
 # testing for the class
@@ -139,8 +158,9 @@ if __name__ == "__main__":
     lr = float(configs['LP Parameter']['learning-rate'])
 
     # load the dataset settings
-    filepath = os.path.join(configs["Data Process"]["entry"], "combined-adj-sparsefeat.pkl")
-    test_ratio = float(configs["Data Process"]["test-ratio"])
+    filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
+    model_path = os.path.join(configs['LP Parameter']["model-entry"], f"{model_name}.pth")
+    test_ratio = float(configs["Task Setting"]["test-ratio"])
     seed = int(configs["Reproduce"]["seed"])
 
     # create dataset
@@ -152,3 +172,6 @@ if __name__ == "__main__":
     ds = link_prediction_ds.split(test_ratio)
     # train the model
     pipeline.train(ds, lr)
+    # store the model
+    pipeline.save_model(model_path)
+    print(pipeline.predict(ds["train_g"]))

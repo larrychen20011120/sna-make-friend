@@ -18,7 +18,6 @@ class LinkPredictionDataset:
         self.num_nodes = self.friendship_matrix.shape[0]
         self.graph = self.__construct_graph()
         self.seed = seed
-        
 
     def split(self, test_ratio=0.3):
         u, v = self.graph.edges()
@@ -85,7 +84,7 @@ class LinkPredictionDataset:
 
         return train_pos_g, train_neg_g, test_pos_g, test_neg_g
 
-    ### Magic functions
+    ### Magic functions -> for printing out the dataset
     def __str__(self):
         informations = [
             f"Friendship matrix shape : { self.friendship_matrix.shape }",
@@ -94,15 +93,53 @@ class LinkPredictionDataset:
         return "\n".join(informations)
     
 
+def sample_friend_pairs(ds, count=500, seed=42):
+    u, v = ds["train_g"].edges()
+    pos_u_list, pos_v_list = list(u), list(v)
+    neg_u_list, neg_v_list = [], []
+    for k, g in ds.items():
+        if k == "train_g":
+            continue
+        if "pos" in k:
+            u, v = g.edges()
+            pos_u_list.extend( list(u) ) 
+            pos_v_list.extend( list(v) )
+        elif "neg" in k:
+            u, v = g.edges()
+            neg_u_list.extend( list(u) )
+            neg_v_list.extend( list(v) )
+    
+    # Find all negative edges
+    adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())))
+    pos = sp.coo_matrix((np.ones(len(pos_u_list)), (np.array(pos_u_list), np.array(pos_v_list))))
+    adj_neg = 1 - adj.todense() - pos - np.eye(ds["train_g"].number_of_nodes())
+    # set negative samples as not friend in the future
+    adj_neg[neg_u_list, neg_v_list] = 0
+    neg_u, neg_v = np.where(adj_neg != 0)
+
+    np.random.seed( seed )
+    neg_eids = np.random.choice(len(neg_u), count)
+
+    return [ (u, v) for u, v in zip(neg_u[neg_eids], neg_v[neg_eids]) ]
+
+
+
+
 # testing for the class
 if __name__ == "__main__":
     # read from setting file
     configs = configparser.ConfigParser()
     configs.read('setting.ini')
     # load the setting parameters
-    filepath = os.path.join(configs["Data Process"]["entry"], "combined-adj-sparsefeat.pkl")
-    test_ratio = float(configs["Data Process"]["test-ratio"])
+    filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
+    test_ratio = float(configs["Task Setting"]["test-ratio"])
     seed = int(configs["Reproduce"]["seed"])
+    count = int(configs["Task Setting"]["friend-sample-count"])
     # create dataset
     link_prediction_ds = LinkPredictionDataset(filepath, seed)
     print(link_prediction_ds)
+
+    # split the dataset before training
+    ds = link_prediction_ds.split(test_ratio)
+    future_friend_pairs = sample_friend_pairs(ds, count=count, seed=seed)
+    print(future_friend_pairs[:10])
