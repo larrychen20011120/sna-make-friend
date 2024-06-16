@@ -2,6 +2,7 @@ import itertools
 import configparser
 import os
 
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -53,20 +54,20 @@ class DotPredictor(nn.Module):
 class Pipeline:
 
     def __init__(self, model_name="GCN", hidden_size=16, in_feats=1283):
-        if model_name == 'GCN':
-            self.model = GCN(in_feats, hidden_size)
-        elif model_name == 'SAGE':
-            self.model = GraphSAGE(in_feats, hidden_size)
 
+        self.model_name = model_name
+        self.model = None
+        self.in_feats = in_feats
+        self.hidden_size = hidden_size
         self.pred = DotPredictor()
 
-    def load_model(self, path):
-        self.model.load_state_dict(torch.load(path))
 
-    def save_model(self, path):
-        torch.save(self.model.state_dict(), path)
+    def train(self, ds, lr=0.001, epochs=100, outer_progress=None):
 
-    def train(self, ds, lr=0.001):
+        if self.model_name == 'GCN':
+            self.model = GCN(self.in_feats, self.hidden_size)
+        elif self.model_name == 'SAGE':
+            self.model = GraphSAGE(self.in_feats, self.hidden_size)
 
         training_losses = []
         # ----------- set up loss and optimizer -------------- #
@@ -74,25 +75,44 @@ class Pipeline:
         optimizer = torch.optim.Adam(itertools.chain(self.model.parameters(), self.pred.parameters()), lr=lr)
 
         # ----------- training -------------------------------- #
-        for e in range(100):
-            # forward
-            h = self.model(ds["train_g"], ds["train_g"].ndata['feat'])  # get node embeddings
-            pos_score = self.pred(ds["train_pos_g"], h)
-            neg_score = self.pred(ds["train_neg_g"], h)
-            loss = compute_loss(pos_score, neg_score)
+        if outer_progress is None:
+            for _ in tqdm(range(epochs)):
+                # forward
+                h = self.model(ds["train_g"], ds["train_g"].ndata['feat'])  # get node embeddings
+                pos_score = self.pred(ds["train_pos_g"], h)
+                neg_score = self.pred(ds["train_neg_g"], h)
+                loss = compute_loss(pos_score, neg_score)
 
-            # backward
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                # backward
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            if e % 5 == 0:
-                print('In epoch {}, loss: {}'.format(e, loss))
                 training_losses.append(loss.item())
+        else:
+            # 合併外面的進度
+            for _ in tqdm(range(epochs), desc="Training", leave=False, position=1):
+
+                # forward
+                h = self.model(ds["train_g"], ds["train_g"].ndata['feat'])  # get node embeddings
+                pos_score = self.pred(ds["train_pos_g"], h)
+                neg_score = self.pred(ds["train_neg_g"], h)
+                loss = compute_loss(pos_score, neg_score)
+
+                # backward
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                training_losses.append(loss.item())
+
+            outer_progress.update(1)
+
 
         with torch.no_grad():
             pos_score = self.pred(ds["test_pos_g"], h)
             neg_score = self.pred(ds["test_neg_g"], h)
+            print()
             print(f"AUC: {compute_auc(pos_score, neg_score):.6f}")
 
         return training_losses
@@ -129,20 +149,16 @@ class Pipeline:
         # produce final ranked list
         scores.sort(key=lambda x: -x[1])
 
-        """# display results
-        print(f"List of 5 suggested friends for user {user_id}:")
-        for i in range(5):
-            print(f'- User {scores[i][0]}, score = {scores[i][1]}')"""
-
         return scores
     
-    def predict(self, input_graph, src_id=0, tgt_id=100):
+    def predict_rank(self, input_graph, src=0, tgt=100):
 
-        with torch.no_grad():
-            h = self.model(input_graph, input_graph.ndata['feat'])
-            score = torch.sum(h[src_id] * h[tgt_id])
-
-        return score.item()
+        result = self.recommend(input_graph, tgt)
+        rank = -1
+        for i, r in enumerate(result):
+            if r[0] == src:
+                rank = i
+        return rank
 
 
 # testing for the class
@@ -156,6 +172,7 @@ if __name__ == "__main__":
     model_name = configs["LP Parameter"]["model-name"]
     hidden_size = int(configs['LP Parameter']['hidden-size'])
     lr = float(configs['LP Parameter']['learning-rate'])
+    epochs = int(configs["LP Parameter"]['epoch'])
 
     # load the dataset settings
     filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
@@ -168,10 +185,8 @@ if __name__ == "__main__":
     # build up pipeline
     torch.manual_seed( seed )
     pipeline = Pipeline(model_name, hidden_size, link_prediction_ds.get_feature_size())
+
     # split the dataset before training
     ds = link_prediction_ds.split(test_ratio)
-    # train the model
-    pipeline.train(ds, lr)
-    # store the model
-    pipeline.save_model(model_path)
-    print(pipeline.predict(ds["train_g"]))
+
+    pipeline.train(ds, lr, epochs)

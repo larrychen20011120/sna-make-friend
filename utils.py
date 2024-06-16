@@ -15,7 +15,13 @@ def compute_auc(pos_score, neg_score):  # computes AUC (Area-Under-Curve) score
     return roc_auc_score(labels, scores)
 
 def compute_rank_error(prev_rank, curr_rank):
-    return np.sum(curr_rank - prev_rank) / len(curr_rank)
+    improved_rank = [ c - p for c, p in zip(curr_rank, prev_rank) ]
+    return {
+         "average": np.sum(improved_rank) / len(curr_rank),
+         "max": np.max(improved_rank),
+         "min": np.min(improved_rank)
+    }
+     
 
 def compute_hit_ratio(prev_rank, curr_rank, top_n=5):
     hit = 0

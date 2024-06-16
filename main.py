@@ -1,13 +1,110 @@
 import numpy as np
+from numpy.linalg import inv
+import torch
+import dgl
 import math
 import random
-from tqdm.auto import tqdm
 
-class GeneticAlgorithm:
-    def __init__(self):
-        pass
+def random_walk_with_restart(graph, start_point, restart_ratio):
+    init_vector = np.zeros((graph.shape[0], 1))
+    init_vector[start_point, 0] = 1
+    # closed-form of RWR
+    proximity = (1 - restart_ratio) * inv( (np.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+    return proximity
 
+## 利用 target 鄰居共同特徵來修改特徵
+class RuleBase:
+    def __init__(self, k_feat=10):
+        self.k_feat = k_feat
 
+    def fit(self, input_graph, pair):
+        user_id, tgt = pair
+        users = []
+        friends = input_graph.adj().to_dense().numpy()
+        features = input_graph.ndata['feat'].numpy()
+
+        for u, is_friend in enumerate(friends[tgt]):
+            if is_friend:
+                users.append(u)
+        users = np.array(users)
+        all_users_list = users.tolist()
+        all_users_features = features[all_users_list, :]
+
+        combined_features = np.sum(all_users_features, axis=0)
+
+        indices = np.flip(np.argsort(combined_features))
+        top_indices, cnt = [], 0
+
+        for index in indices:
+            if features[user_id, index] == 0 and combined_features[index] != 0:
+                top_indices.append(index)
+                cnt += 1
+            elif features[user_id, index] != 0 and combined_features[index] == 0:
+                top_indices.append(index)
+                cnt += 1
+            if cnt == self.k_feat:
+                break
+        
+        src, dst = np.nonzero(friends)
+        g = dgl.graph((src, dst))
+
+        modified_features = features.copy()
+        modified_features[user_id, top_indices] = 1
+        g.ndata['feat'] = torch.tensor(modified_features, dtype=torch.float32)
+
+        return g
+    
+## 利用 RWR 找出最重要的鄰居，與他們建立朋友關係
+class RandomWalkWithRestart:
+
+    def __init__(self, restart_ratio, k_new_friend, walk_graph="adj", epsilon=1e-4):
+        self.restart_ratio = restart_ratio
+        self.k_new_friend = k_new_friend
+        self.walk_graph = walk_graph
+        self.epsilon = epsilon
+
+    def fit(self, input_graph, pair):
+        user_id, tgt = pair
+        input_graph = dgl.remove_self_loop(input_graph.clone())
+        
+        # get friends and feature metrix
+        friends = input_graph.adj().to_dense().numpy()
+        features = input_graph.ndata['feat'].numpy()
+        # turn to float
+        friends = friends.astype(float)
+
+        if self.walk_graph == "adj":
+            # normalize friends
+            friends += (self.epsilon * np.eye(friends.shape[0], dtype=float))
+            normalized_friends = friends / np.sum(friends, axis=1)
+
+        elif self.walk_graph == "weighted":
+            # Compute feature inner product matrix
+            feature_inner_product = np.dot(features, features.T)
+            # Replace the original adjacency matrix values with feature inner product values
+            neighbors = (friends == 1)
+            friends[neighbors] = feature_inner_product[neighbors]
+            # Normalize the friends matrix
+            friends += (self.epsilon * np.eye(friends.shape[0], dtype=float))
+            normalized_friends = friends / np.sum(friends, axis=1)
+
+        else:
+            print("Error in reading parameter walk graph!!")
+            exit(1)
+
+        proximity = random_walk_with_restart(normalized_friends, tgt, self.restart_ratio)
+        top_friends = np.flip(np.argsort(proximity.reshape(-1)))[1:self.k_new_friend+1]
+
+        friends[top_friends, user_id] = 1
+        friends[user_id, top_friends] = 1
+
+        src, dst = np.nonzero(friends)
+        g = dgl.graph((src, dst))
+        g.ndata['feat'] = torch.tensor(features, dtype=torch.float32)
+
+        return g
+
+## 利用最佳化方法結合 RWR 來尋找最佳解
 class SimulatedAnnealing:
     
     def __init__(self, **param):
@@ -18,23 +115,22 @@ class SimulatedAnnealing:
         self.answer_size = param["max_change_count"]
         self.seed = param["seed"]
 
-    def fit(self, pair, input_graph, pipeline):
+    def fit(self, pair, input_graph, restart_ratio=0.1):
 
-        src, tgt = pair
+        user_id, tgt = pair
         input_graph = input_graph.clone()
         node_size = input_graph.ndata['feat'].shape[0]
         feature_size = input_graph.ndata['feat'].shape[1]
 
         temperature = self.start_temp
         
-        init_fitness = pipeline.predict(input_graph, src, tgt)
         curr_answer = self.__init_answer(node_size, feature_size)
-        alter_graph = self.__alter_graph(input_graph, curr_answer, src)
-        next_fitness = pipeline.predict(alter_graph, src, tgt)
+        alter_graph = self.__alter_graph(input_graph, curr_answer, user_id)
+        proximity = random_walk_with_restart(alter_graph, tgt, restart_ratio=restart_ratio)
+        proximity = proximity.reshape(-1)
+        curr_fitness = proximity[user_id]
 
-        curr_fitness = next_fitness
-
-        for _ in tqdm(range(self.max_iter)):
+        for _ in range(self.max_iter):
             if temperature == self.end_temp:
                 return curr_answer, curr_fitness
         
@@ -47,8 +143,10 @@ class SimulatedAnnealing:
 
             next_answer = curr_answer[:]
             next_answer[alter_pos] = r
-            alter_graph = self.__alter_graph(input_graph, next_answer, src)
-            next_fitness = pipeline.predict(alter_graph, src, tgt)  
+            alter_graph = self.__alter_graph(input_graph, next_answer, user_id)
+            proximity = random_walk_with_restart(alter_graph, tgt, restart_ratio=restart_ratio)
+            proximity = proximity.reshape(-1)
+            next_fitness = proximity[user_id]
             improved_fitness = next_fitness - curr_fitness
 
             if improved_fitness > 0:
@@ -67,20 +165,7 @@ class SimulatedAnnealing:
 
             temperature *= self.cooling_rate
 
-        init_rank, curr_rank = None, None
-        for rank, (user, _) in enumerate(pipeline.recommend(input_graph, tgt)):
-            if user == src:
-                init_rank = rank
-        alter_graph = self.__alter_graph(input_graph, curr_answer, src)
-        for rank, (user, _) in enumerate(pipeline.recommend(alter_graph, tgt)):
-            if user == src:
-                curr_rank = rank
-        
-        return {
-            "adjustment":    curr_answer,
-            "improved-fitness": curr_fitness - init_fitness,
-            "improved-rank": curr_rank - init_rank
-        }
+        return self.__alter_graph(input_graph, curr_answer, src)
 
 
     def __init_answer(self, node_size, feature_size):
@@ -114,12 +199,13 @@ class SimulatedAnnealing:
         return input_graph
 
 
-
 import configparser
 import os
 import torch
 from dataset import LinkPredictionDataset, sample_friend_pairs
 from model import Pipeline
+from utils import compute_rank_error
+from tqdm import tqdm
 
 # testing for the class
 if __name__ == "__main__":
@@ -132,12 +218,19 @@ if __name__ == "__main__":
     model_name = configs["LP Parameter"]["model-name"]
     hidden_size = int(configs['LP Parameter']['hidden-size'])
     lr = float(configs['LP Parameter']['learning-rate'])
+    epochs = int(configs["LP Parameter"]['epoch'])
 
     # load the dataset settings
     filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
     test_ratio = float(configs["Task Setting"]["test-ratio"])
     seed = int(configs["Reproduce"]["seed"])
     count = int(configs["Task Setting"]["friend-sample-count"])
+    max_alter_count = int(configs["Task Setting"]["max-alter-count"])
+
+    # load algorithm parameter
+    restart_ratio = float(configs['Random Walk']['restart-ratio'])
+    epsilon = float(configs["Random Walk"]["epsilon"])
+    walk_graph = configs["Random Walk"]["walk-graph"]
 
     # create dataset
     link_prediction_ds = LinkPredictionDataset(filepath, seed)
@@ -146,21 +239,31 @@ if __name__ == "__main__":
     pipeline = Pipeline(model_name, hidden_size, link_prediction_ds.get_feature_size())
     # split the dataset before training
     ds = link_prediction_ds.split(test_ratio)
-    # train the model
-    pipeline.train(ds, lr)
+    pipeline.train(ds, lr=lr, epochs=epochs)
+
     future_friend_pairs = sample_friend_pairs(ds, count=count, seed=seed)
 
-    # SA
-    start_temp = int(configs["SA Parameter"]["init-temp"])
-    end_temp = int(configs["SA Parameter"]["end-temp"])
-    max_iter = int(configs["SA Parameter"]["max-iter"])
-    cooling_rate = float(configs["SA Parameter"]["cooling-rate"])
-    max_change_count = int(configs["Task Setting"]["max-change-count"])
+    method = RandomWalkWithRestart(restart_ratio, max_alter_count, walk_graph, epsilon)
+    origin_ranks, new_ranks = [], []
 
-    sa = SimulatedAnnealing(
-        start_temp=start_temp, end_temp=end_temp, max_iter=max_iter,
-        cooling_rate=cooling_rate, max_change_count=max_change_count, seed=seed
-    )
+    with tqdm(total=count, desc="Total Progress", position=0) as outer_progress:
+        for pair in future_friend_pairs:
+            src, tgt = pair
+            g = method.fit(ds["train_g"], pair)
+            
+            # change new graph to dataset
+            link_prediction_ds.set_new_graph(g)
+            # split the dataset before training
+            ds = link_prediction_ds.split(test_ratio, pairs=future_friend_pairs)
 
-    for pair in future_friend_pairs:
-        print(sa.fit(pair, ds["train_g"], pipeline))
+            # build up pipeline
+            torch.manual_seed( seed )
+            new_pipeline = Pipeline(model_name, hidden_size, link_prediction_ds.get_feature_size())
+            new_pipeline.train(ds, lr, epochs, outer_progress)
+
+            # get new rank
+            origin_ranks.append( pipeline.predict_rank(ds["train_g"], src, tgt) )
+            new_ranks.append( new_pipeline.predict_rank(ds["train_g"], src, tgt) )
+        
+    # output the score
+    print( compute_rank_error(origin_ranks, new_ranks) )
