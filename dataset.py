@@ -151,7 +151,7 @@ if __name__ == "__main__":
     # load the setting parameters
     filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
     test_ratio = float(configs["Task Setting"]["test-ratio"])
-    seed = int(configs["Reproduce"]["seed"])
+    seed = int(configs["Run Setting"]["seed"])
     count = int(configs["Task Setting"]["friend-sample-count"])
     # create dataset
     link_prediction_ds = LinkPredictionDataset(filepath, seed)

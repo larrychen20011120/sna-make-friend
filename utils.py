@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 import numpy as np
+import cupy as cp
 
 def compute_loss(pos_score, neg_score):  # computes the loss based on binary cross entropy
         scores = torch.cat([pos_score, neg_score])
@@ -29,3 +30,9 @@ def compute_hit_ratio(prev_rank, curr_rank, top_n=5):
         if p > top_n and c <= top_n:
              hit += 1
     return hit / len(curr_rank)
+
+def to_gpu(nparray):
+    return cp.asarray(nparray)
+
+def to_cpu(cparray):
+    return cp.asnumpy(cparray)

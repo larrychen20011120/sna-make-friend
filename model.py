@@ -178,7 +178,7 @@ if __name__ == "__main__":
     filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
     model_path = os.path.join(configs['LP Parameter']["model-entry"], f"{model_name}.pth")
     test_ratio = float(configs["Task Setting"]["test-ratio"])
-    seed = int(configs["Reproduce"]["seed"])
+    seed = int(configs["Run Setting"]["seed"])
 
     # create dataset
     link_prediction_ds = LinkPredictionDataset(filepath, seed)

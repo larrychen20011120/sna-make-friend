@@ -1,18 +1,68 @@
 import numpy as np
-from numpy.linalg import inv
+import cupy as cp
 import torch
 import dgl
 import math
 import random
 
-def random_walk_with_restart(graph, start_point, restart_ratio):
+from utils import to_cpu, to_gpu
+
+
+### with GPU speeding up
+def random_walk_with_restart(graph, start_point, restart_ratio, device="cpu"):
     init_vector = np.zeros((graph.shape[0], 1))
     init_vector[start_point, 0] = 1
-    # closed-form of RWR
-    proximity = (1 - restart_ratio) * inv( (np.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+
+    # calculate closed-form of RWR
+    if device == "cpu":
+        proximity = (1 - restart_ratio) * np.linalg.inv( (np.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+    elif device == "gpu":
+        init_vector = to_gpu(init_vector)
+        proximity = (1 - restart_ratio) * cp.linalg.inv( (cp.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+    else:
+        print(f"No Such Device: {device}!!")
+        exit(-1)
     return proximity
 
+def construct_normalized_graph(friends, features, epsilon=1e-4, walk_graph="weighted", device="cpu"):
+    if walk_graph == "adj":
+        # normalize friends
+        if device == "cpu":
+            friends += (epsilon * np.eye(friends.shape[0], dtype=float))
+            normalized_friends = friends / np.sum(friends, axis=1)
+        else:
+            friends += (epsilon * cp.eye(friends.shape[0], dtype=float))
+            normalized_friends = friends / cp.sum(friends, axis=1)
+
+    elif walk_graph == "weighted":
+
+        if device == "cpu":
+            # Compute feature inner product matrix
+            feature_inner_product = np.dot(features, features.T)
+            # Replace the original adjacency matrix values with feature inner product values
+            neighbors = (friends == 1)
+            friends[neighbors] = feature_inner_product[neighbors]
+            # Normalize the friends matrix
+            friends += (epsilon * np.eye(friends.shape[0], dtype=float))
+            normalized_friends = friends / np.sum(friends, axis=1)
+        else:
+            # Compute feature inner product matrix
+            feature_inner_product = cp.dot(features, features.T)
+            # Replace the original adjacency matrix values with feature inner product values
+            neighbors = (friends == 1)
+            friends[neighbors] = feature_inner_product[neighbors]
+            # Normalize the friends matrix
+            friends += (epsilon * cp.eye(friends.shape[0], dtype=float))
+            normalized_friends = friends / cp.sum(friends, axis=1)
+
+    else:
+        print("Error in reading parameter walk graph!!")
+        exit(1)
+
+    return normalized_friends
+
 ## 利用 target 鄰居共同特徵來修改特徵
+###### 不使用 GPU 加速
 class RuleBase:
     def __init__(self, k_feat=10):
         self.k_feat = k_feat
@@ -57,11 +107,12 @@ class RuleBase:
 ## 利用 RWR 找出最重要的鄰居，與他們建立朋友關係
 class RandomWalkWithRestart:
 
-    def __init__(self, restart_ratio, k_new_friend, walk_graph="adj", epsilon=1e-4):
-        self.restart_ratio = restart_ratio
-        self.k_new_friend = k_new_friend
-        self.walk_graph = walk_graph
-        self.epsilon = epsilon
+    def __init__(self, **param):
+        self.restart_ratio = param["restart_ratio"]
+        self.k_new_friend = param["k_new_friend"]
+        self.walk_graph = param["walk_graph"]
+        self.epsilon = param["epsilon"]
+        self.device = param["device"]
 
     def fit(self, input_graph, pair):
         user_id, tgt = pair
@@ -73,27 +124,18 @@ class RandomWalkWithRestart:
         # turn to float
         friends = friends.astype(float)
 
-        if self.walk_graph == "adj":
-            # normalize friends
-            friends += (self.epsilon * np.eye(friends.shape[0], dtype=float))
-            normalized_friends = friends / np.sum(friends, axis=1)
+        #### put it on the device
+        if self.device == "gpu":
+            friends = to_gpu(friends)
+            features = to_gpu(features)
 
-        elif self.walk_graph == "weighted":
-            # Compute feature inner product matrix
-            feature_inner_product = np.dot(features, features.T)
-            # Replace the original adjacency matrix values with feature inner product values
-            neighbors = (friends == 1)
-            friends[neighbors] = feature_inner_product[neighbors]
-            # Normalize the friends matrix
-            friends += (self.epsilon * np.eye(friends.shape[0], dtype=float))
-            normalized_friends = friends / np.sum(friends, axis=1)
+        normalized_friends = construct_normalized_graph(friends, features, self.epsilon, self.walk_graph, self.device)
+        proximity = random_walk_with_restart(normalized_friends, tgt, self.restart_ratio, self.device)
 
-        else:
-            print("Error in reading parameter walk graph!!")
-            exit(1)
-
-        proximity = random_walk_with_restart(normalized_friends, tgt, self.restart_ratio)
-        top_friends = np.flip(np.argsort(proximity.reshape(-1)))[1:self.k_new_friend+1]
+        #### convert to numpy
+        proximity = to_cpu(proximity)
+        proximity = proximity.reshape(-1)
+        top_friends = np.flip(np.argsort(proximity))[1:self.k_new_friend+1]
 
         friends[top_friends, user_id] = 1
         friends[user_id, top_friends] = 1
@@ -112,21 +154,40 @@ class SimulatedAnnealing:
         self.end_temp = param["end_temp"]
         self.cooling_rate = param["cooling_rate"]
         self.max_iter = param["max_iter"]
-        self.answer_size = param["max_change_count"]
+        self.answer_size = param["answer_size"]
         self.seed = param["seed"]
+        self.device = param["device"]
 
-    def fit(self, pair, input_graph, restart_ratio=0.1):
+    def fit(self, input_graph, pair, restart_ratio=0.1):
 
         user_id, tgt = pair
         input_graph = input_graph.clone()
         node_size = input_graph.ndata['feat'].shape[0]
         feature_size = input_graph.ndata['feat'].shape[1]
 
+
         temperature = self.start_temp
-        
+
+        # 隨機挑選初始值並產生初始解
         curr_answer = self.__init_answer(node_size, feature_size)
         alter_graph = self.__alter_graph(input_graph, curr_answer, user_id)
-        proximity = random_walk_with_restart(alter_graph, tgt, restart_ratio=restart_ratio)
+
+        # get friends and feature metrix
+        alter_graph = dgl.remove_self_loop(alter_graph)
+        friends = alter_graph.adj().to_dense().numpy()
+        features = alter_graph.ndata['feat'].numpy()
+        # turn to float
+        friends = friends.astype(float)
+
+        #### put it on the device
+        if self.device == "gpu":
+            friends = to_gpu(friends)
+            features = to_gpu(features)
+
+        normalized_friends = construct_normalized_graph(friends, features)
+        proximity = random_walk_with_restart(normalized_friends, tgt, restart_ratio=restart_ratio)
+
+        proximity = to_cpu(proximity)
         proximity = proximity.reshape(-1)
         curr_fitness = proximity[user_id]
 
@@ -144,8 +205,25 @@ class SimulatedAnnealing:
             next_answer = curr_answer[:]
             next_answer[alter_pos] = r
             alter_graph = self.__alter_graph(input_graph, next_answer, user_id)
-            proximity = random_walk_with_restart(alter_graph, tgt, restart_ratio=restart_ratio)
+
+           # get friends and feature metrix
+            alter_graph = dgl.remove_self_loop(alter_graph)
+            friends = alter_graph.adj().to_dense().numpy()
+            features = alter_graph.ndata['feat'].numpy()
+            # turn to float
+            friends = friends.astype(float)
+
+            #### put it on the device
+            if self.device == "gpu":
+                friends = to_gpu(friends)
+                features = to_gpu(features)
+
+            normalized_friends = construct_normalized_graph(friends, features)
+            proximity = random_walk_with_restart(normalized_friends, tgt, restart_ratio=restart_ratio)
+
+            proximity = to_cpu(proximity)
             proximity = proximity.reshape(-1)
+
             next_fitness = proximity[user_id]
             improved_fitness = next_fitness - curr_fitness
 
@@ -214,6 +292,10 @@ if __name__ == "__main__":
     configs = configparser.ConfigParser()
     configs.read('setting.ini')
 
+    # load running setting
+    seed = int(configs["Run Setting"]["seed"])
+    device = configs["Run Setting"]["device"]
+
     # load the training setting parameters
     model_name = configs["LP Parameter"]["model-name"]
     hidden_size = int(configs['LP Parameter']['hidden-size'])
@@ -223,7 +305,6 @@ if __name__ == "__main__":
     # load the dataset settings
     filepath = os.path.join(configs["Task Setting"]["entry"], "combined-adj-sparsefeat.pkl")
     test_ratio = float(configs["Task Setting"]["test-ratio"])
-    seed = int(configs["Reproduce"]["seed"])
     count = int(configs["Task Setting"]["friend-sample-count"])
     max_alter_count = int(configs["Task Setting"]["max-alter-count"])
 
@@ -231,6 +312,10 @@ if __name__ == "__main__":
     restart_ratio = float(configs['Random Walk']['restart-ratio'])
     epsilon = float(configs["Random Walk"]["epsilon"])
     walk_graph = configs["Random Walk"]["walk-graph"]
+    start_temp = int(configs["Simulated Annealing"]["start-temp"])
+    end_temp = int(configs["Simulated Annealing"]["end-temp"])
+    max_iter = int(configs["Simulated Annealing"]["max-iter"])
+    cooling_rate = float(configs["Simulated Annealing"]["cooling-rate"])
 
     # create dataset
     link_prediction_ds = LinkPredictionDataset(filepath, seed)
@@ -243,7 +328,14 @@ if __name__ == "__main__":
 
     future_friend_pairs = sample_friend_pairs(ds, count=count, seed=seed)
 
-    method = RandomWalkWithRestart(restart_ratio, max_alter_count, walk_graph, epsilon)
+    # method = RuleBase(max_alter_count) #
+    # method = RandomWalkWithRestart(restart_ratio, max_alter_count, walk_graph, epsilon) #
+    method = SimulatedAnnealing(
+        start_temp=start_temp, end_temp=end_temp, max_iter=max_iter,
+        cooling_rate=cooling_rate, answer_size=max_alter_count,
+        seed=seed, device=device
+    )
+
     origin_ranks, new_ranks = [], []
 
     with tqdm(total=count, desc="Total Progress", position=0) as outer_progress:
