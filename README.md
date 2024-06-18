@@ -22,6 +22,7 @@ pip install -r requirements.txt
 * install your own **pytorch** version wtih the correct cuda version (you can type `nvidia-smi` to see cuda version)
 * install dgl
    * first run the following code to get the correct torch version and cuda version
+     
      ```
      !python -c "import torch; print(torch.__version__)"
      ```
@@ -31,6 +32,7 @@ pip install -r requirements.txt
      ```
 * install cupy (the GPU-accelerated numpy library)
    * if your cuda is 11.2-11.8, then run the following code to install cupy
+     
      ```
      pip install cupy-cuda11x
      ```
