@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 import numpy as np
-import cupy as cp
+import random
 
 def compute_loss(pos_score, neg_score):  # computes the loss based on binary cross entropy
         scores = torch.cat([pos_score, neg_score])
@@ -16,7 +16,7 @@ def compute_auc(pos_score, neg_score):  # computes AUC (Area-Under-Curve) score
     return roc_auc_score(labels, scores)
 
 def compute_rank_error(prev_rank, curr_rank):
-    improved_rank = [ c - p for c, p in zip(curr_rank, prev_rank) ]
+    improved_rank = [ p-c for c, p in zip(curr_rank, prev_rank) ]
     return {
          "average": np.sum(improved_rank) / len(curr_rank),
          "max": np.max(improved_rank),
@@ -31,8 +31,5 @@ def compute_hit_ratio(prev_rank, curr_rank, top_n=5):
              hit += 1
     return hit / len(curr_rank)
 
-def to_gpu(nparray):
-    return cp.asarray(nparray)
-
-def to_cpu(cparray):
-    return cparray.get()
+def select_source(recommend_list, start, end):
+     return random.choice(recommend_list[start: end])[0]

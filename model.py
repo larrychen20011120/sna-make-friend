@@ -11,7 +11,6 @@ from dgl.nn import SAGEConv, GraphConv
 import dgl.function as fn
 
 from utils import compute_loss, compute_auc
-from dataset import LinkPredictionDataset
 
 
 # build two-layer GraphConv model
@@ -62,7 +61,7 @@ class Pipeline:
         self.pred = DotPredictor()
 
 
-    def train(self, ds, lr=0.001, epochs=100, outer_progress=None):
+    def train(self, ds, lr=0.001, epochs=100):
 
         if self.model_name == 'GCN':
             self.model = GCN(self.in_feats, self.hidden_size)
@@ -75,38 +74,19 @@ class Pipeline:
         optimizer = torch.optim.Adam(itertools.chain(self.model.parameters(), self.pred.parameters()), lr=lr)
 
         # ----------- training -------------------------------- #
-        if outer_progress is None:
-            for _ in tqdm(range(epochs)):
-                # forward
-                h = self.model(ds["train_g"], ds["train_g"].ndata['feat'])  # get node embeddings
-                pos_score = self.pred(ds["train_pos_g"], h)
-                neg_score = self.pred(ds["train_neg_g"], h)
-                loss = compute_loss(pos_score, neg_score)
+        for _ in tqdm(range(epochs)):
+            # forward
+            h = self.model(ds["train_g"], ds["train_g"].ndata['feat'])  # get node embeddings
+            pos_score = self.pred(ds["train_pos_g"], h)
+            neg_score = self.pred(ds["train_neg_g"], h)
+            loss = compute_loss(pos_score, neg_score)
 
-                # backward
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+            # backward
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-                training_losses.append(loss.item())
-        else:
-            # 合併外面的進度
-            for _ in tqdm(range(epochs), desc="Training", leave=False, position=1):
-
-                # forward
-                h = self.model(ds["train_g"], ds["train_g"].ndata['feat'])  # get node embeddings
-                pos_score = self.pred(ds["train_pos_g"], h)
-                neg_score = self.pred(ds["train_neg_g"], h)
-                loss = compute_loss(pos_score, neg_score)
-
-                # backward
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                training_losses.append(loss.item())
-
-            outer_progress.update(1)
+            training_losses.append(loss.item())
 
 
         with torch.no_grad():
@@ -125,7 +105,7 @@ class Pipeline:
         # one end of the edge is user_id
         # the other end is a user that's NOT friends with user_id
         u, v = input_graph.edges()
-        user_friends = set()
+        user_friends = set([user_id])
         user_neg_u, user_neg_v = [], []
         for n1, n2 in zip(u, v):   # get all friends of user_id
             if int(n1) == user_id:

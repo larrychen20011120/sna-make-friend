@@ -30,16 +30,6 @@ pip install -r requirements.txt
      ```
      pip install  dgl -f https://data.dgl.ai/wheels/torch-{torch_version_here}/cu{cuda_version_here}/repo.html
      ```
-* install cupy (the GPU-accelerated numpy library)
-   * if your cuda is 11.2-11.8, then run the following code to install cupy
-     
-     ```
-     pip install cupy-cuda11x
-     ```
-   * if your cuda is 12.x, then run the following code to install cupy
-     ```
-     pip install cupy-cuda12x
-     ```
 
 ## Sample Code of training model
 * GCN
