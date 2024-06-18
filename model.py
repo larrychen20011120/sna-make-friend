@@ -65,8 +65,10 @@ class Pipeline:
 
         if self.model_name == 'GCN':
             self.model = GCN(self.in_feats, self.hidden_size)
+            lr=0.001
         elif self.model_name == 'SAGE':
             self.model = GraphSAGE(self.in_feats, self.hidden_size)
+            lr=0.0002
 
         training_losses = []
         # ----------- set up loss and optimizer -------------- #
