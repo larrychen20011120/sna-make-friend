@@ -17,8 +17,9 @@ def compute_auc(pos_score, neg_score):  # computes AUC (Area-Under-Curve) score
 
 def compute_rank_error(prev_rank, curr_rank):
     improved_rank = [ p-c for c, p in zip(curr_rank, prev_rank) ]
+    improved_rank = [r for r in improved_rank if r >= 0]
     return {
-         "average": np.sum(improved_rank) / len(curr_rank),
+         "average": np.sum(improved_rank) / len(improved_rank),
          "max": np.max(improved_rank),
          "min": np.min(improved_rank)
     }
