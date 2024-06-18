@@ -6,7 +6,7 @@
 git clone https://github.com/larrychen20011120/sna-make-friend.git
 cd sna-make-friend
 ```
-2. make facebook directory
+2. make facebook directory in order to keep the installed dataset
 ```shell
 mkdir facebook
 ```
@@ -15,21 +15,28 @@ mkdir facebook
 wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1WzV_rQ9oTxsw3s7yyXzdqEcrQgW591fj' -O ./facebook/combined-adj-sparsefeat.pkl
 ```
 4. install dependencies
-* simple installation for none gpu-relavant packages
+* simple installation for **none gpu-relavant** packages
 ```
 pip install -r requirements.txt
 ```
-* install your own pytorch version wtih the correct cuda version
+* install your own **pytorch** version wtih the correct cuda version (you can type `nvidia-smi` to see cuda version)
 * install dgl
    * first run the following code to get the correct torch version and cuda version
      ```
      !python -c "import torch; print(torch.__version__)"
      ```
-   * if your cuda is 11.2-11.8, then run the following code to install dgl and cupy
-   * if your cuda is 12.x, then run the following code to install dgl and cupy
-   ```
-   pip install  dgl -f https://data.dgl.ai/wheels/torch-2.3/repo.html
-   ```
+   * install the dgl lib
+     ```
+     pip install  dgl -f https://data.dgl.ai/wheels/torch-{torch_version_here}/cu{cuda_version_here}/repo.html
+     ```
+   * if your cuda is 11.2-11.8, then run the following code to install cupy
+     ```
+     pip install cupy-cuda11x
+     ```
+   * if your cuda is 12.x, then run the following code to install cupy
+     ```
+     pip install cupy-cuda11x
+     ```
 
 ## Sample Code of training model
 * GCN
