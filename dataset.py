@@ -142,7 +142,6 @@ def sample_friend_pairs(ds, count=500, seed=42):
 
 
 
-
 # testing for the class
 if __name__ == "__main__":
     # read from setting file

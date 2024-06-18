@@ -38,7 +38,7 @@ pip install -r requirements.txt
      ```
    * if your cuda is 12.x, then run the following code to install cupy
      ```
-     pip install cupy-cuda11x
+     pip install cupy-cuda12x
      ```
 
 ## Sample Code of training model

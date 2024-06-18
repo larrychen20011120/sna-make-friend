@@ -8,21 +8,51 @@ import random
 from utils import to_cpu, to_gpu
 
 
-### with GPU speeding up
-def random_walk_with_restart(graph, start_point, restart_ratio, device="cpu"):
-    init_vector = np.zeros((graph.shape[0], 1))
-    init_vector[start_point, 0] = 1
+# ### with GPU speeding up
+# def random_walk_with_restart(graph, start_point, restart_ratio, device="cpu"):
+#     init_vector = np.zeros((graph.shape[0], 1))
+#     init_vector[start_point, 0] = 1
 
-    # calculate closed-form of RWR
+#     # calculate closed-form of RWR
+#     if device == "cpu":
+#         proximity = (1 - restart_ratio) * np.linalg.inv( (np.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+#     elif device == "gpu":
+#         init_vector = to_gpu(init_vector)
+#         proximity = (1 - restart_ratio) * cp.linalg.inv( (cp.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+#     else:
+#         print(f"No Such Device: {device}!!")
+#         exit(-1)
+#     return proximity
+
+def random_walk_with_restart(graph, start_point, restart_ratio, max_iter=100, tol=1e-6, device="cpu"):
     if device == "cpu":
-        proximity = (1 - restart_ratio) * np.linalg.inv( (np.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+        graph = np.array(graph)
+        init_vector = np.zeros((graph.shape[0], 1))
+        init_vector[start_point, 0] = 1
+        p = init_vector.copy()
+        
+        for _ in range(max_iter):
+            prev_p = p.copy()
+            p = (1 - restart_ratio) * np.dot(graph, p) + restart_ratio * init_vector
+            if np.linalg.norm(p - prev_p, 1) < tol:
+                break
+                
     elif device == "gpu":
-        init_vector = to_gpu(init_vector)
-        proximity = (1 - restart_ratio) * cp.linalg.inv( (cp.eye(graph.shape[0]) - restart_ratio*graph) ) @ init_vector
+        graph = cp.array(graph)
+        init_vector = cp.zeros((graph.shape[0], 1))
+        init_vector[start_point, 0] = 1
+        p = init_vector.copy()
+        
+        for _ in range(max_iter):
+            prev_p = p.copy()
+            p = (1 - restart_ratio) * cp.dot(graph, p) + restart_ratio * init_vector
+            if cp.linalg.norm(p - prev_p, 1) < tol:
+                break
+        
     else:
-        print(f"No Such Device: {device}!!")
-        exit(-1)
-    return proximity
+        raise ValueError(f"No Such Device: {device}!!")
+    
+    return p
 
 def construct_normalized_graph(friends, features, epsilon=1e-4, walk_graph="weighted", device="cpu"):
     if walk_graph == "adj":
@@ -31,7 +61,7 @@ def construct_normalized_graph(friends, features, epsilon=1e-4, walk_graph="weig
             friends += (epsilon * np.eye(friends.shape[0], dtype=float))
             normalized_friends = friends / np.sum(friends, axis=1)
         else:
-            friends += (epsilon * cp.eye(friends.shape[0], dtype=float))
+            friends += (epsilon * cp.eye(friends.shape[0]))
             normalized_friends = friends / cp.sum(friends, axis=1)
 
     elif walk_graph == "weighted":
@@ -52,7 +82,7 @@ def construct_normalized_graph(friends, features, epsilon=1e-4, walk_graph="weig
             neighbors = (friends == 1)
             friends[neighbors] = feature_inner_product[neighbors]
             # Normalize the friends matrix
-            friends += (epsilon * cp.eye(friends.shape[0], dtype=float))
+            friends += (epsilon * cp.eye(friends.shape[0]))
             normalized_friends = friends / cp.sum(friends, axis=1)
 
     else:
@@ -109,7 +139,7 @@ class RandomWalkWithRestart:
 
     def __init__(self, **param):
         self.restart_ratio = param["restart_ratio"]
-        self.k_new_friend = param["k_new_friend"]
+        self.k_new_friend = param["max_alter_count"]
         self.walk_graph = param["walk_graph"]
         self.epsilon = param["epsilon"]
         self.device = param["device"]
@@ -130,10 +160,12 @@ class RandomWalkWithRestart:
             features = to_gpu(features)
 
         normalized_friends = construct_normalized_graph(friends, features, self.epsilon, self.walk_graph, self.device)
-        proximity = random_walk_with_restart(normalized_friends, tgt, self.restart_ratio, self.device)
+        proximity = random_walk_with_restart(normalized_friends, tgt, self.restart_ratio, device=self.device)
 
         #### convert to numpy
-        proximity = to_cpu(proximity)
+        if self.device == "gpu":
+            proximity = to_cpu(proximity)
+
         proximity = proximity.reshape(-1)
         top_friends = np.flip(np.argsort(proximity))[1:self.k_new_friend+1]
 
@@ -185,13 +217,15 @@ class SimulatedAnnealing:
             features = to_gpu(features)
 
         normalized_friends = construct_normalized_graph(friends, features)
-        proximity = random_walk_with_restart(normalized_friends, tgt, restart_ratio=restart_ratio)
+        proximity = random_walk_with_restart(normalized_friends, tgt, restart_ratio=restart_ratio, device=self.device)
 
-        proximity = to_cpu(proximity)
+        #### convert to numpy
+        if self.device == "gpu":
+            proximity = to_cpu(proximity)
         proximity = proximity.reshape(-1)
         curr_fitness = proximity[user_id]
 
-        for _ in range(self.max_iter):
+        for _ in tqdm(range(self.max_iter)):
             if temperature == self.end_temp:
                 return curr_answer, curr_fitness
         
@@ -219,9 +253,11 @@ class SimulatedAnnealing:
                 features = to_gpu(features)
 
             normalized_friends = construct_normalized_graph(friends, features)
-            proximity = random_walk_with_restart(normalized_friends, tgt, restart_ratio=restart_ratio)
+            proximity = random_walk_with_restart(normalized_friends, tgt, restart_ratio=restart_ratio, device=self.device)
 
-            proximity = to_cpu(proximity)
+            #### convert to numpy
+            if self.device == "gpu":
+                proximity = to_cpu(proximity)
             proximity = proximity.reshape(-1)
 
             next_fitness = proximity[user_id]
@@ -329,12 +365,15 @@ if __name__ == "__main__":
     future_friend_pairs = sample_friend_pairs(ds, count=count, seed=seed)
 
     # method = RuleBase(max_alter_count) #
-    # method = RandomWalkWithRestart(restart_ratio, max_alter_count, walk_graph, epsilon) #
-    method = SimulatedAnnealing(
-        start_temp=start_temp, end_temp=end_temp, max_iter=max_iter,
-        cooling_rate=cooling_rate, answer_size=max_alter_count,
-        seed=seed, device=device
+    method = RandomWalkWithRestart(
+        restart_ratio=restart_ratio, max_alter_count=max_alter_count, 
+        walk_graph=walk_graph, epsilon=epsilon, device=device
     )
+    # method = SimulatedAnnealing(
+    #     start_temp=start_temp, end_temp=end_temp, max_iter=max_iter,
+    #     cooling_rate=cooling_rate, answer_size=max_alter_count,
+    #     seed=seed, device=device
+    # )
 
     origin_ranks, new_ranks = [], []
 

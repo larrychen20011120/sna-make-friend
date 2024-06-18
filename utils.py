@@ -35,4 +35,4 @@ def to_gpu(nparray):
     return cp.asarray(nparray)
 
 def to_cpu(cparray):
-    return cp.asnumpy(cparray)
+    return cparray.get()
