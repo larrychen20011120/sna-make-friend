@@ -15,14 +15,21 @@ mkdir facebook
 wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1WzV_rQ9oTxsw3s7yyXzdqEcrQgW591fj' -O ./facebook/combined-adj-sparsefeat.pkl
 ```
 4. install dependencies
-* simple installation
+* simple installation for none gpu-relavant packages
 ```
 pip install -r requirements.txt
 ```
-* if there is a version problem of DGL library, you should run the following command instead of installing the DGL lib from requirements.txt
-```
-pip install  dgl -f https://data.dgl.ai/wheels/torch-2.3/repo.html
-```
+* install your own pytorch version wtih the correct cuda version
+* install dgl
+   * first run the following code to get the correct torch version and cuda version
+     ```
+     !python -c "import torch; print(torch.__version__)"
+     ```
+   * if your cuda is 11.2-11.8, then run the following code to install dgl and cupy
+   * if your cuda is 12.x, then run the following code to install dgl and cupy
+   ```
+   pip install  dgl -f https://data.dgl.ai/wheels/torch-2.3/repo.html
+   ```
 
 ## Sample Code of training model
 * GCN
