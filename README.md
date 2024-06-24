@@ -39,3 +39,11 @@ pip install -r requirements.txt
     * train the GCN model with `hidden-size=16`, `lr=0.0002`
     * the AUC performance converges to **0.922333**
 * Conclusion -> learning rate has a great impact on training graph neural network
+
+## the project structures
+* model.py: GCN, SAGE, and recommendation pipeline
+* utils.py: the way to compute loss value and mean rank error
+* our experiments is running on three python notebooks
+	* Experiment 1: change_feature_only.ipynb
+	* Experiment 2: rwr.ipynb
+	* Experiment 3: sa.ipynb  (it's recommended to run it with CUDA)
