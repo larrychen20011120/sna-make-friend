@@ -24,7 +24,7 @@ pip install -r requirements.txt
    * first run the following code to get the correct torch version and cuda version
      
      ```
-     !python -c "import torch; print(torch.__version__)"
+     python -c "import torch; print(torch.__version__)"
      ```
    * install the dgl lib
      ```
@@ -47,3 +47,27 @@ pip install -r requirements.txt
 	* Experiment 1: change_feature_only.ipynb
 	* Experiment 2: rwr.ipynb
 	* Experiment 3: sa.ipynb  (it's recommended to run it with CUDA)
+
+## our proposed methods
+* Rule Based
+
+  * based on target's friends
+
+    ![](assets/exp1.png)
+
+  * based on target's ranking list
+
+    ![](assets/exp2.png)
+
+* Random Walk with Restart
+
+  ![](assets/rwr.png)
+
+* Simulated Annealing
+
+  ![](assets/sa.png)
+
+## experiments result
+The whole comparison the like the following table. To see more details, please open the `report.pdf` to see the concrete experiment settings and alogrithm definition.
+
+![](assets/table.png)
